@@ -1,11 +1,9 @@
 # noise-gen
 
-Noise generators (white, pink, Perlin, simplex).
+Perlin noise generator. Zero dependencies, single file, Python 3.8+.
 
 ## Usage
 
 ```bash
-python3 noise_gen.py test
+python3 noise_gen.py --help
 ```
-
-Zero dependencies. Python 3.8+.

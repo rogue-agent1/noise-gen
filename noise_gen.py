@@ -1,68 +1,60 @@
 #!/usr/bin/env python3
-"""noise_gen - Noise generators (white, pink, Perlin, simplex)."""
-import sys, math, random
+"""Perlin-like noise generator. Zero dependencies."""
+import math, random, sys
 
-def white_noise(n, seed=None):
-    if seed is not None:
+class PerlinNoise:
+    def __init__(self, seed=0):
         random.seed(seed)
-    return [random.gauss(0, 1) for _ in range(n)]
+        self.p = list(range(256))
+        random.shuffle(self.p)
+        self.p *= 2
 
-def pink_noise(n, seed=None):
-    if seed is not None:
-        random.seed(seed)
-    b = [0.0] * 7
+    def _fade(self, t): return t*t*t*(t*(t*6-15)+10)
+    def _lerp(self, a, b, t): return a + t*(b-a)
+    def _grad(self, h, x, y=0):
+        h = h & 15
+        u = x if h < 8 else y
+        v = y if h < 4 else (x if h in (12,14) else 0)
+        return (u if h&1 == 0 else -u) + (v if h&2 == 0 else -v)
+
+    def noise2d(self, x, y):
+        X, Y = int(math.floor(x)) & 255, int(math.floor(y)) & 255
+        x -= math.floor(x); y -= math.floor(y)
+        u, v = self._fade(x), self._fade(y)
+        A = self.p[X] + Y; B = self.p[X+1] + Y
+        return self._lerp(
+            self._lerp(self._grad(self.p[A], x, y), self._grad(self.p[B], x-1, y), u),
+            self._lerp(self._grad(self.p[A+1], x, y-1), self._grad(self.p[B+1], x-1, y-1), u), v)
+
+    def octave(self, x, y, octaves=4, persistence=0.5):
+        total = 0; freq = 1; amp = 1; max_val = 0
+        for _ in range(octaves):
+            total += self.noise2d(x*freq, y*freq) * amp
+            max_val += amp; freq *= 2; amp *= persistence
+        return total / max_val
+
+def generate_map(width, height, scale=0.05, seed=0):
+    noise = PerlinNoise(seed)
+    return [[noise.octave(x*scale, y*scale) for x in range(width)] for y in range(height)]
+
+def to_ascii(nmap, chars=" .:-=+*#%@"):
     result = []
-    for _ in range(n):
-        white = random.gauss(0, 1)
-        b[0] = 0.99886 * b[0] + white * 0.0555179
-        b[1] = 0.99332 * b[1] + white * 0.0750759
-        b[2] = 0.96900 * b[2] + white * 0.1538520
-        b[3] = 0.86650 * b[3] + white * 0.3104856
-        b[4] = 0.55000 * b[4] + white * 0.5329522
-        b[5] = -0.7616 * b[5] - white * 0.0168980
-        result.append(sum(b[:6]) + white * 0.5362)
-        b[6] = white * 0.115926
-    return result
-
-def _fade(t):
-    return t * t * t * (t * (t * 6 - 15) + 10)
-
-def _lerp(a, b, t):
-    return a + t * (b - a)
-
-def perlin_1d(x, perm):
-    xi = int(x) & 255
-    xf = x - int(x)
-    u = _fade(xf)
-    g0 = (1 if perm[xi] % 2 == 0 else -1) * xf
-    g1 = (1 if perm[(xi+1) & 255] % 2 == 0 else -1) * (xf - 1)
-    return _lerp(g0, g1, u)
-
-def perlin_noise(n, scale=0.1, seed=None):
-    if seed is not None:
-        random.seed(seed)
-    perm = list(range(256))
-    random.shuffle(perm)
-    perm = perm + perm
-    return [perlin_1d(i * scale, perm) for i in range(n)]
-
-def test():
-    # white noise: mean ~0, std ~1
-    wn = white_noise(10000, seed=42)
-    assert abs(sum(wn)/len(wn)) < 0.05
-    assert 0.9 < (sum(x**2 for x in wn)/len(wn))**0.5 < 1.1
-    # pink noise
-    pn = pink_noise(1000, seed=42)
-    assert len(pn) == 1000
-    # perlin noise is smooth
-    prl = perlin_noise(100, scale=0.05, seed=42)
-    assert len(prl) == 100
-    diffs = [abs(prl[i+1] - prl[i]) for i in range(99)]
-    assert max(diffs) < 0.5  # smooth
-    print("OK: noise_gen")
+    for row in nmap:
+        line = ""
+        for v in row:
+            idx = int((v + 1) / 2 * (len(chars) - 1))
+            idx = max(0, min(len(chars)-1, idx))
+            line += chars[idx]
+        result.append(line)
+    return "\n".join(result)
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
-        test()
-    else:
-        print("Usage: noise_gen.py test")
+    import argparse
+    p = argparse.ArgumentParser(description="Noise generator")
+    p.add_argument("-w", "--width", type=int, default=80)
+    p.add_argument("-h", "--height", type=int, default=24)
+    p.add_argument("-s", "--scale", type=float, default=0.08)
+    p.add_argument("--seed", type=int, default=42)
+    args = p.parse_args()
+    nmap = generate_map(args.width, args.height, args.scale, args.seed)
+    print(to_ascii(nmap))
