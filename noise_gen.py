@@ -1,48 +1,108 @@
-import argparse, math, random
+#!/usr/bin/env python3
+"""noise_gen - Perlin and simplex noise generators."""
+import math, sys, random
 
-def fade(t): return t*t*t*(t*(t*6-15)+10)
-def lerp(a, b, t): return a + t*(b-a)
+class PerlinNoise:
+    def __init__(self, seed=0):
+        random.seed(seed)
+        self.perm = list(range(256))
+        random.shuffle(self.perm)
+        self.perm *= 2
+        self.grad = [(math.cos(2*math.pi*i/8), math.sin(2*math.pi*i/8)) for i in range(8)]
+    
+    def _fade(self, t):
+        return t * t * t * (t * (t * 6 - 15) + 10)
+    
+    def _lerp(self, a, b, t):
+        return a + t * (b - a)
+    
+    def _dot_grad(self, ix, iy, x, y):
+        g = self.grad[self.perm[self.perm[ix & 255] + (iy & 255)] % 8]
+        return g[0] * (x - ix) + g[1] * (y - iy)
+    
+    def noise2d(self, x, y):
+        x0 = int(math.floor(x))
+        y0 = int(math.floor(y))
+        x1, y1 = x0 + 1, y0 + 1
+        sx = self._fade(x - x0)
+        sy = self._fade(y - y0)
+        n00 = self._dot_grad(x0, y0, x, y)
+        n10 = self._dot_grad(x1, y0, x, y)
+        n01 = self._dot_grad(x0, y1, x, y)
+        n11 = self._dot_grad(x1, y1, x, y)
+        ix0 = self._lerp(n00, n10, sx)
+        ix1 = self._lerp(n01, n11, sx)
+        return self._lerp(ix0, ix1, sy)
+    
+    def octave(self, x, y, octaves=4, persistence=0.5, lacunarity=2):
+        total = 0
+        amplitude = 1
+        frequency = 1
+        max_val = 0
+        for _ in range(octaves):
+            total += self.noise2d(x * frequency, y * frequency) * amplitude
+            max_val += amplitude
+            amplitude *= persistence
+            frequency *= lacunarity
+        return total / max_val
 
-def perlin_2d(width, height, scale=10, octaves=4, seed=None):
-    if seed: random.seed(seed)
-    # Generate gradient grid
-    gw, gh = width//scale+2, height//scale+2
-    grads = [[(random.gauss(0,1), random.gauss(0,1)) for _ in range(gw)] for _ in range(gh)]
-    def dot_grad(ix, iy, x, y):
-        dx, dy = x-ix, y-iy
-        gx, gy = grads[iy % gh][ix % gw]
-        return dx*gx + dy*gy
-    def noise(x, y):
-        x0, y0 = int(x), int(y)
-        x1, y1 = x0+1, y0+1
-        sx, sy = fade(x-x0), fade(y-y0)
-        n0 = lerp(dot_grad(x0,y0,x,y), dot_grad(x1,y0,x,y), sx)
-        n1 = lerp(dot_grad(x0,y1,x,y), dot_grad(x1,y1,x,y), sx)
-        return lerp(n0, n1, sy)
-    grid = [[0.0]*width for _ in range(height)]
-    for o in range(octaves):
-        freq = 2**o
-        amp = 0.5**o
-        for y in range(height):
-            for x in range(width):
-                grid[y][x] += noise(x*freq/scale, y*freq/scale) * amp
+def fractal_noise(width, height, scale=0.05, octaves=4, seed=42):
+    pn = PerlinNoise(seed)
+    grid = []
+    for y in range(height):
+        row = []
+        for x in range(width):
+            v = pn.octave(x * scale, y * scale, octaves)
+            row.append(v)
+        grid.append(row)
     return grid
 
-def main():
-    p = argparse.ArgumentParser(description="Perlin noise generator")
-    p.add_argument("-w", "--width", type=int, default=60)
-    p.add_argument("-H", "--height", type=int, default=30)
-    p.add_argument("-s", "--scale", type=int, default=10)
-    p.add_argument("-o", "--octaves", type=int, default=4)
-    p.add_argument("--seed", type=int)
-    args = p.parse_args()
-    grid = perlin_2d(args.width, args.height, args.scale, args.octaves, args.seed)
-    chars = " ·:;+*#%@"
-    mn = min(min(r) for r in grid)
-    mx = max(max(r) for r in grid)
+def normalize(grid):
+    flat = [v for row in grid for v in row]
+    mn, mx = min(flat), max(flat)
     rng = mx - mn or 1
-    for row in grid:
-        print("".join(chars[min(int((v-mn)/rng*(len(chars)-1)), len(chars)-1)] for v in row))
+    return [[(v - mn) / rng for v in row] for row in grid]
+
+def to_ascii(grid, chars=" .:-=+*#%@"):
+    return "\n".join("".join(chars[min(len(chars)-1, int(v * (len(chars)-1)))] for v in row) for row in grid)
+
+def test():
+    pn = PerlinNoise(seed=42)
+    v = pn.noise2d(0.5, 0.5)
+    assert -1 <= v <= 1
+    
+    v2 = pn.octave(0.5, 0.5, octaves=4)
+    assert -1 <= v2 <= 1
+    
+    # Deterministic
+    assert pn.noise2d(1.5, 2.5) == pn.noise2d(1.5, 2.5)
+    
+    # Different seeds differ
+    pn2 = PerlinNoise(seed=99)
+    assert pn.noise2d(0.5, 0.5) != pn2.noise2d(0.5, 0.5)
+    
+    # Fractal noise
+    grid = fractal_noise(20, 10, scale=0.1, seed=42)
+    assert len(grid) == 10
+    assert len(grid[0]) == 20
+    
+    norm = normalize(grid)
+    flat = [v for row in norm for v in row]
+    assert min(flat) >= 0 and max(flat) <= 1
+    
+    ascii_art = to_ascii(norm)
+    assert len(ascii_art.split("\n")) == 10
+    
+    print(ascii_art)
+    print("All tests passed!")
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        test()
+    elif len(sys.argv) > 1:
+        w = int(sys.argv[1]) if len(sys.argv) > 1 else 80
+        h = int(sys.argv[2]) if len(sys.argv) > 2 else 40
+        grid = normalize(fractal_noise(w, h))
+        print(to_ascii(grid))
+    else:
+        print("Usage: noise_gen.py [width] [height] | test")
